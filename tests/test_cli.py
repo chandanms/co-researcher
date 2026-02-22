@@ -143,33 +143,30 @@ class TestResearchDecomposerPrompt:
 class TestResearchOrchestrator:
     """Test the ResearchOrchestrator class."""
 
-    def test_init_with_api_key(self, tmp_path):
-        """Test initialization with API key."""
+    @patch("research_orchestrator.LLMClient")
+    def test_init(self, mock_llm_class, tmp_path):
+        """Test initialization."""
         csv_file = tmp_path / "test.csv"
         csv_file.write_text("a,b\n1,2")
 
         orchestrator = ResearchOrchestrator(
             csv_files=[str(csv_file)],
             output_dir=str(tmp_path / "output"),
-            anthropic_api_key="test-key",
         )
 
-        assert orchestrator.api_key == "test-key"
         assert len(orchestrator.csv_files) == 1
 
-    def test_init_without_api_key(self, tmp_path):
-        """Test initialization fails without API key."""
+    def test_init_without_env(self, tmp_path):
+        """Test initialization fails without environment variables."""
         csv_file = tmp_path / "test.csv"
         csv_file.write_text("a,b\n1,2")
 
         with patch.dict(os.environ, {}, clear=True):
-            with pytest.raises(ValueError, match="ANTHROPIC_API_KEY"):
-                ResearchOrchestrator(
-                    csv_files=[str(csv_file)],
-                    anthropic_api_key=None,
-                )
+            with pytest.raises(ValueError, match="AZURE_ANTHROPIC"):
+                ResearchOrchestrator(csv_files=[str(csv_file)])
 
-    def test_analyze_csv(self, tmp_path):
+    @patch("research_orchestrator.LLMClient")
+    def test_analyze_csv(self, mock_llm_class, tmp_path):
         """Test CSV analysis."""
         csv_file = tmp_path / "test.csv"
         df = pd.DataFrame({
@@ -179,10 +176,7 @@ class TestResearchOrchestrator:
         })
         df.to_csv(csv_file, index=False)
 
-        orchestrator = ResearchOrchestrator(
-            csv_files=[str(csv_file)],
-            anthropic_api_key="test-key",
-        )
+        orchestrator = ResearchOrchestrator(csv_files=[str(csv_file)])
 
         info = orchestrator.analyze_csv(str(csv_file))
 
@@ -193,16 +187,14 @@ class TestResearchOrchestrator:
         assert info["row_count"] == 3
         assert "int" in info["dtypes"]["age"].lower()
 
+    @patch("research_orchestrator.LLMClient")
     @patch.object(ResearchOrchestrator, "_execute_branch")
-    def test_execute_branches_parallel(self, mock_execute, tmp_path):
+    def test_execute_branches_parallel(self, mock_execute, mock_llm_class, tmp_path):
         """Test parallel execution of branches."""
         csv_file = tmp_path / "test.csv"
         csv_file.write_text("a,b\n1,2")
 
-        orchestrator = ResearchOrchestrator(
-            csv_files=[str(csv_file)],
-            anthropic_api_key="test-key",
-        )
+        orchestrator = ResearchOrchestrator(csv_files=[str(csv_file)])
 
         # Create mock branches
         branches = [

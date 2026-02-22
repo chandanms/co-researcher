@@ -393,36 +393,39 @@ class TestOrchestrator:
         assert len(graph["cells"]) == 1
         assert "x" in graph["definitions"]
 
-    def test_orchestrator_init_with_key(self):
-        """Test orchestrator initialization with API key."""
-        app = create_empty_notebook()
-        orchestrator = MarimoOrchestrator(app, anthropic_api_key="test-key")
+    def test_orchestrator_init(self):
+        """Test orchestrator initialization."""
+        with patch("llm_client.LLMClient"):
+            app = create_empty_notebook()
+            orchestrator = MarimoOrchestrator(app)
 
-        assert orchestrator.app is app
-        assert orchestrator.max_retries == 3
+            assert orchestrator.app is app
+            assert orchestrator.max_retries == 3
 
-    def test_orchestrator_init_without_key(self):
-        """Test orchestrator fails without API key."""
+    def test_orchestrator_init_without_env(self):
+        """Test orchestrator fails without environment variables."""
         with patch.dict("os.environ", {}, clear=True):
-            with pytest.raises(ValueError, match="ANTHROPIC_API_KEY"):
-                MarimoOrchestrator(anthropic_api_key=None)
+            with pytest.raises(ValueError, match="AZURE_ANTHROPIC"):
+                MarimoOrchestrator()
 
-    @patch.object(MarimoOrchestrator, "_call_llm")
-    def test_synthesize_cell(self, mock_llm):
+    @patch("orchestrator.LLMClient")
+    def test_synthesize_cell(self, mock_llm_class):
         """Test cell synthesis with mocked LLM."""
-        mock_llm.return_value = {
+        mock_llm = MagicMock()
+        mock_llm.call.return_value = {
             "code": "result = x + y",
             "explanation": "Add x and y",
             "defines": ["result"],
             "references": ["x", "y"],
         }
+        mock_llm_class.return_value = mock_llm
 
         cells = [
             {"code": "x = 1", "name": "define_x"},
             {"code": "y = 2", "name": "define_y"},
         ]
         app = create_notebook(cells)
-        orchestrator = MarimoOrchestrator(app, anthropic_api_key="test-key")
+        orchestrator = MarimoOrchestrator(app)
 
         result = orchestrator.synthesize_cell(
             purpose="Add x and y together",
@@ -431,23 +434,25 @@ class TestOrchestrator:
 
         assert result["code"] == "result = x + y"
         assert "result" in result["defines"]
-        mock_llm.assert_called_once()
+        mock_llm.call.assert_called_once()
 
-    @patch.object(MarimoOrchestrator, "_call_llm")
-    def test_recover_from_error(self, mock_llm):
+    @patch("orchestrator.LLMClient")
+    def test_recover_from_error(self, mock_llm_class):
         """Test error recovery with mocked LLM."""
-        mock_llm.return_value = {
+        mock_llm = MagicMock()
+        mock_llm.call.return_value = {
             "fixed_code": "y = str(x) + 'suffix'",
             "bug_type": "TypeError",
             "fix_explanation": "Convert int to string before concatenation",
         }
+        mock_llm_class.return_value = mock_llm
 
         cells = [
             {"code": "x = 1", "name": "define_x"},
             {"code": "y = x + 'suffix'", "name": "bad_cell"},
         ]
         app = create_notebook(cells)
-        orchestrator = MarimoOrchestrator(app, anthropic_api_key="test-key")
+        orchestrator = MarimoOrchestrator(app)
 
         error = TypeError("unsupported operand type(s)")
         result = orchestrator.recover_from_error(
@@ -459,44 +464,48 @@ class TestOrchestrator:
         assert "fixed_code" in result
         assert result["bug_type"] == "TypeError"
 
-    @patch.object(MarimoOrchestrator, "_call_llm")
-    def test_get_verification_spec(self, mock_llm):
+    @patch("orchestrator.LLMClient")
+    def test_get_verification_spec(self, mock_llm_class):
         """Test verification spec generation with mocked LLM."""
-        mock_llm.return_value = {
+        mock_llm = MagicMock()
+        mock_llm.call.return_value = {
             "reasoning": "downstream uses sum, so must be numeric list",
             "assertions": [
                 "assert isinstance(x, list)",
                 "assert all(isinstance(i, (int, float)) for i in x)",
             ],
         }
+        mock_llm_class.return_value = mock_llm
 
         cells = [
             {"code": "x = [1, 2, 3]", "name": "create_list"},
             {"code": "total = sum(x)", "name": "compute_sum"},
         ]
         app = create_notebook(cells)
-        orchestrator = MarimoOrchestrator(app, anthropic_api_key="test-key")
+        orchestrator = MarimoOrchestrator(app)
 
         result = orchestrator.get_verification_spec(cell_name="create_list")
 
         assert "assertions" in result
         assert len(result["assertions"]) == 2
 
-    @patch.object(MarimoOrchestrator, "_call_llm")
-    def test_decide_backtrack(self, mock_llm):
+    @patch("orchestrator.LLMClient")
+    def test_decide_backtrack(self, mock_llm_class):
         """Test backtrack decision with mocked LLM."""
-        mock_llm.return_value = {
+        mock_llm = MagicMock()
+        mock_llm.call.return_value = {
             "reasoning": "The upstream cell produces wrong type",
             "cell_to_regenerate": "define_x",
             "confidence": 0.85,
         }
+        mock_llm_class.return_value = mock_llm
 
         cells = [
             {"code": "x = 1", "name": "define_x"},
             {"code": "y = x + 1", "name": "failing_cell"},
         ]
         app = create_notebook(cells)
-        orchestrator = MarimoOrchestrator(app, anthropic_api_key="test-key")
+        orchestrator = MarimoOrchestrator(app)
 
         result = orchestrator.decide_backtrack(
             cell_name="failing_cell",
@@ -506,12 +515,10 @@ class TestOrchestrator:
         assert result["cell_to_regenerate"] == "define_x"
         assert result["confidence"] == 0.85
 
-    def test_run_assertions_pass(self):
+    @patch("orchestrator.LLMClient")
+    def test_run_assertions_pass(self, mock_llm_class):
         """Test running assertions that pass."""
-        orchestrator = MarimoOrchestrator(
-            create_empty_notebook(),
-            anthropic_api_key="test-key",
-        )
+        orchestrator = MarimoOrchestrator(create_empty_notebook())
 
         assertions = [
             "assert x == 1",
@@ -523,12 +530,10 @@ class TestOrchestrator:
 
         assert len(failed) == 0
 
-    def test_run_assertions_fail(self):
+    @patch("orchestrator.LLMClient")
+    def test_run_assertions_fail(self, mock_llm_class):
         """Test running assertions that fail."""
-        orchestrator = MarimoOrchestrator(
-            create_empty_notebook(),
-            anthropic_api_key="test-key",
-        )
+        orchestrator = MarimoOrchestrator(create_empty_notebook())
 
         assertions = [
             "assert x == 2",  # Will fail
@@ -541,14 +546,15 @@ class TestOrchestrator:
         assert len(failed) == 1
         assert "x == 2" in failed[0]
 
-    def test_replace_cell(self):
+    @patch("orchestrator.LLMClient")
+    def test_replace_cell(self, mock_llm_class):
         """Test replacing a cell's code."""
         cells = [
             {"code": "x = 1", "name": "cell_a"},
             {"code": "y = x + 1", "name": "cell_b"},
         ]
         app = create_notebook(cells)
-        orchestrator = MarimoOrchestrator(app, anthropic_api_key="test-key")
+        orchestrator = MarimoOrchestrator(app)
 
         new_app = orchestrator._replace_cell(app, "cell_a", "x = 100")
         outputs, defs = run_notebook(new_app)
@@ -556,11 +562,12 @@ class TestOrchestrator:
         assert defs["x"] == 100
         assert defs["y"] == 101
 
-    @patch.object(MarimoOrchestrator, "_call_llm")
-    def test_run_task_simple(self, mock_llm):
+    @patch("orchestrator.LLMClient")
+    def test_run_task_simple(self, mock_llm_class):
         """Test running a simple task with mocked LLM."""
+        mock_llm = MagicMock()
         # Mock responses for task decomposition and verification
-        mock_llm.side_effect = [
+        mock_llm.call.side_effect = [
             # Task decomposition response
             {
                 "reasoning": "Simple math task",
@@ -579,9 +586,10 @@ class TestOrchestrator:
                 "assertions": ["assert isinstance(result, int)"],
             },
         ]
+        mock_llm_class.return_value = mock_llm
 
         app = create_empty_notebook()
-        orchestrator = MarimoOrchestrator(app, anthropic_api_key="test-key")
+        orchestrator = MarimoOrchestrator(app)
 
         result_app = orchestrator.run_task(
             task_description="Add 1 and 2",
@@ -592,57 +600,60 @@ class TestOrchestrator:
         outputs, defs = run_notebook(result_app)
         assert defs["result"] == 3
 
-    def test_call_llm_json_parsing(self):
-        """Test LLM response JSON parsing."""
-        orchestrator = MarimoOrchestrator(
-            create_empty_notebook(),
-            anthropic_api_key="test-key",
-        )
+    def test_llm_client_json_parsing(self):
+        """Test LLM client JSON parsing via LLMClient.call()."""
+        from llm_client import LLMClient
 
-        # Mock the Anthropic client
-        mock_response = MagicMock()
-        mock_response.content = [MagicMock(text='{"key": "value"}')]
+        with patch.object(LLMClient, "__init__", lambda self: None):
+            client = LLMClient()
+            client.client = MagicMock()
+            client.model = "test-model"
+            client.max_tokens = 4096
 
-        with patch.object(
-            orchestrator.client.messages, "create", return_value=mock_response
-        ):
-            result = orchestrator._call_llm("test prompt")
+            # Mock response
+            mock_response = MagicMock()
+            mock_response.content = [MagicMock(text='{"key": "value"}')]
+            client.client.messages.create.return_value = mock_response
 
-        assert result == {"key": "value"}
-
-    def test_call_llm_markdown_stripping(self):
-        """Test LLM response markdown code block stripping."""
-        orchestrator = MarimoOrchestrator(
-            create_empty_notebook(),
-            anthropic_api_key="test-key",
-        )
-
-        # Mock response with markdown code block
-        mock_response = MagicMock()
-        mock_response.content = [MagicMock(text='```json\n{"key": "value"}\n```')]
-
-        with patch.object(
-            orchestrator.client.messages, "create", return_value=mock_response
-        ):
-            result = orchestrator._call_llm("test prompt")
+            result = client.call("test prompt")
 
         assert result == {"key": "value"}
 
-    def test_call_llm_parse_error(self):
-        """Test LLM response parse error handling."""
-        orchestrator = MarimoOrchestrator(
-            create_empty_notebook(),
-            anthropic_api_key="test-key",
-        )
+    def test_llm_client_markdown_stripping(self):
+        """Test LLM client markdown code block stripping."""
+        from llm_client import LLMClient
 
-        # Mock response with invalid JSON
-        mock_response = MagicMock()
-        mock_response.content = [MagicMock(text="not valid json")]
+        with patch.object(LLMClient, "__init__", lambda self: None):
+            client = LLMClient()
+            client.client = MagicMock()
+            client.model = "test-model"
+            client.max_tokens = 4096
 
-        with patch.object(
-            orchestrator.client.messages, "create", return_value=mock_response
-        ):
-            result = orchestrator._call_llm("test prompt")
+            # Mock response with markdown code block
+            mock_response = MagicMock()
+            mock_response.content = [MagicMock(text='```json\n{"key": "value"}\n```')]
+            client.client.messages.create.return_value = mock_response
+
+            result = client.call("test prompt")
+
+        assert result == {"key": "value"}
+
+    def test_llm_client_parse_error(self):
+        """Test LLM client parse error handling."""
+        from llm_client import LLMClient
+
+        with patch.object(LLMClient, "__init__", lambda self: None):
+            client = LLMClient()
+            client.client = MagicMock()
+            client.model = "test-model"
+            client.max_tokens = 4096
+
+            # Mock response with invalid JSON
+            mock_response = MagicMock()
+            mock_response.content = [MagicMock(text="not valid json")]
+            client.client.messages.create.return_value = mock_response
+
+            result = client.call("test prompt")
 
         assert "error" in result
         assert result["error"] == "parse_failed"
@@ -719,11 +730,12 @@ class TestIntegration:
         assert "correlation_cell" in synth_prompt
         assert "df" in synth_prompt
 
-    @patch.object(MarimoOrchestrator, "_call_llm")
-    def test_full_workflow_mocked(self, mock_llm):
+    @patch("orchestrator.LLMClient")
+    def test_full_workflow_mocked(self, mock_llm_class):
         """Test complete workflow with mocked LLM calls."""
+        mock_llm = MagicMock()
         # Set up mock responses
-        mock_llm.side_effect = [
+        mock_llm.call.side_effect = [
             # Task decomposition
             {
                 "reasoning": "Need to create data and compute mean",
@@ -753,9 +765,10 @@ class TestIntegration:
                 "assertions": ["assert isinstance(mean_value, (int, float))"],
             },
         ]
+        mock_llm_class.return_value = mock_llm
 
         app = create_empty_notebook()
-        orchestrator = MarimoOrchestrator(app, anthropic_api_key="test-key")
+        orchestrator = MarimoOrchestrator(app)
 
         result_app = orchestrator.run_task(
             task_description="Create data and compute its mean",
